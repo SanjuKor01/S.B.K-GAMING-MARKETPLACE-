@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Carrom Neon Arena - Online Multiplayer</title>
+  <style>
+    :root { --bg:#070915; --panel:#10162f; --neon:#00e7ff; --pink:#ff2fa5; --text:#eaf4ff; }
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,sans-serif;background:radial-gradient(circle at top,#12193a,var(--bg));color:var(--text);padding:14px}
+    .wrap{max-width:860px;margin:auto}.top{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;background:rgba(255,255,255,.05);border:1px solid rgba(0,231,255,.35);padding:10px;border-radius:12px;box-shadow:0 0 16px rgba(0,231,255,.2)}
+    .player.active{color:var(--neon);font-weight:700;text-shadow:0 0 8px var(--neon)} #p2{text-align:right}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.toolbar input,.toolbar button{padding:8px 10px;border-radius:8px;border:none}
+    .toolbar button{background:linear-gradient(90deg,var(--neon),var(--pink));color:#001;font-weight:700;cursor:pointer}
+    canvas{width:100%;aspect-ratio:1;border-radius:16px;display:block;background:#120e0b;touch-action:none;box-shadow:0 0 26px rgba(255,47,165,.25),0 0 30px rgba(0,231,255,.2)}
+    .small{opacity:.86;font-size:.9rem}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2>🎮 Carrom Neon Arena (Online + Mobile)</h2>
+  <div class="toolbar">
+    <input id="roomId" placeholder="Room ID (ex: sbk-room)" />
+    <button id="joinBtn">Join Online Room</button>
+    <button id="localBtn">Play Local 2P</button>
+  </div>
+  <div class="top">
+    <div id="p1" class="player active">P1: <strong id="s1">0</strong></div>
+    <div id="status">Join room for online multiplayer</div>
+    <div id="p2" class="player">P2: <strong id="s2">0</strong></div>
+  </div>
+  <canvas id="c" width="760" height="760"></canvas>
+  <p class="small">Mobile: touch and drag on striker to shoot. Queen cover rule enabled. Sound + neon effects on.</p>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const p1=document.getElementById('p1'),p2=document.getElementById('p2'),s1=document.getElementById('s1'),s2=document.getElementById('s2');
+const board={x:90,y:90,size:580,pocketR:24,bounce:.9}; const friction=.992, stop=.03, strikerR=15, coinR=11;
+const striker={x:0,y:0,r:strikerR,vx:0,vy:0,color:'#f5f5f5',kind:'striker'}; const coins=[]; const effects=[];
+let scores=[0,0],currentPlayer=0,aiming=false,aimPoint=null,shotInProgress=false,turnPocketedCoin=false,turnPocketedQueen=false,queenNeedsCover=false,queenOwner=null;
+let online=false,myPlayerIndex=0,socket=null;
+
+function buildCoins(){coins.length=0;const cx=board.x+board.size/2,cy=board.y+board.size/2,g=coinR*2+2;[{x:0,y:0,c:'#ff2f6d',k:'queen'},{x:g,y:0,c:'#111',k:'black'},{x:-g,y:0,c:'#f6deb8',k:'white'},{x:g/2,y:g*.86,c:'#111',k:'black'},{x:-g/2,y:g*.86,c:'#f6deb8',k:'white'},{x:g/2,y:-g*.86,c:'#111',k:'black'},{x:-g/2,y:-g*.86,c:'#f6deb8',k:'white'},{x:0,y:g*1.72,c:'#111',k:'black'},{x:0,y:-g*1.72,c:'#f6deb8',k:'white'}].forEach(o=>coins.push({x:cx+o.x,y:cy+o.y,r:coinR,vx:0,vy:0,color:o.c,kind:o.k,active:true}));}
+function resetStriker(){striker.x=board.x+board.size/2;striker.y=board.y+board.size-68;striker.vx=striker.vy=0;}
+const pockets=()=>[{x:board.x,y:board.y},{x:board.x+board.size,y:board.y},{x:board.x,y:board.y+board.size},{x:board.x+board.size,y:board.y+board.size}];
+
+function drawBoard(){ctx.fillStyle='#51321f';ctx.fillRect(30,30,700,700);let g=ctx.createLinearGradient(board.x,board.y,board.x+board.size,board.y+board.size);g.addColorStop(0,'#e6bf95');g.addColorStop(1,'#c1864f');ctx.fillStyle=g;ctx.fillRect(board.x,board.y,board.size,board.size);ctx.strokeStyle='#00e7ff';ctx.lineWidth=3;ctx.strokeRect(board.x,board.y,board.size,board.size);ctx.shadowColor='#00e7ff';ctx.shadowBlur=8;pockets().forEach(p=>{ctx.fillStyle='#070707';ctx.beginPath();ctx.arc(p.x,p.y,board.pocketR,0,Math.PI*2);ctx.fill();});ctx.shadowBlur=0;ctx.beginPath();ctx.arc(board.x+board.size/2,board.y+board.size/2,46,0,Math.PI*2);ctx.stroke();}
+function piece(p){const rg=ctx.createRadialGradient(p.x-3,p.y-3,2,p.x,p.y,p.r);rg.addColorStop(0,'#fff');rg.addColorStop(1,p.color);ctx.fillStyle=rg;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();}
+function mv(p){p.x+=p.vx;p.y+=p.vy;p.vx*=friction;p.vy*=friction;if(Math.abs(p.vx)<stop)p.vx=0;if(Math.abs(p.vy)<stop)p.vy=0;const l=board.x+p.r,r=board.x+board.size-p.r,t=board.y+p.r,b=board.y+board.size-p.r;if(p.x<l){p.x=l;p.vx*=-board.bounce;play('wall')}if(p.x>r){p.x=r;p.vx*=-board.bounce;play('wall')}if(p.y<t){p.y=t;p.vy*=-board.bounce;play('wall')}if(p.y>b){p.y=b;p.vy*=-board.bounce;play('wall')}}
+function col(a,b){const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy),m=a.r+b.r;if(!d||d>=m)return;const nx=dx/d,ny=dy/d,o=(m-d)/2;a.x-=nx*o;a.y-=ny*o;b.x+=nx*o;b.y+=ny*o;const rvx=b.vx-a.vx,rvy=b.vy-a.vy,vn=rvx*nx+rvy*ny;if(vn>0)return;const j=-(1+.93)*vn/2,ix=j*nx,iy=j*ny;a.vx-=ix;a.vy-=iy;b.vx+=ix;b.vy+=iy;play('hit')}
+function fx(t,x,y,c='#fff'){effects.push({t,x,y,l:45,c})}
+function drawFx(){for(let i=effects.length-1;i>=0;i--){const e=effects[i];e.l--;e.y-=.35;if(e.l<=0){effects.splice(i,1);continue}ctx.globalAlpha=e.l/45;ctx.fillStyle=e.c;ctx.fillText(e.t,e.x,e.y);ctx.globalAlpha=1}}
+function pocket(piece,isCoin){for(const p of pockets()){if(Math.hypot(piece.x-p.x,piece.y-p.y)<board.pocketR-2){if(isCoin){piece.active=false;piece.vx=piece.vy=0;turnPocketedCoin=true;play('pocket');if(piece.kind==='queen'){turnPocketedQueen=true;queenNeedsCover=true;queenOwner=currentPlayer;fx('QUEEN!',piece.x,piece.y,'#ff76bc')}else{scores[currentPlayer]+=10;fx('+10',piece.x,piece.y,'#8eff9f')}updateUI()}else{resetStriker();scores[currentPlayer]=Math.max(0,scores[currentPlayer]-5);fx('-5',piece.x,piece.y,'#ffb5b5');updateUI();play('foul')}return true}}return false}
+const moving=()=>striker.vx||striker.vy||coins.some(c=>c.active&&(c.vx||c.vy));
+function endTurn(){shotInProgress=false;if(queenNeedsCover&&queenOwner===currentPlayer){if(turnPocketedCoin){queenNeedsCover=false;queenOwner=null;scores[currentPlayer]+=50;fx('+50 QUEEN',280,130,'#ff94cb');updateUI()}else{const q=coins.find(c=>c.kind==='queen');q.active=true;q.x=board.x+board.size/2;q.y=board.y+board.size/2;q.vx=q.vy=0;queenNeedsCover=false;queenOwner=null;fx('Queen Respot',300,130,'#ffd0ea')}}if(!turnPocketedCoin){currentPlayer=(currentPlayer+1)%2;if(online&&socket&&myPlayerIndex===((currentPlayer+1)%2))socket.emit('pass-turn');}turnPocketedCoin=false;turnPocketedQueen=false;resetStriker();statusEl.textContent=`Player ${currentPlayer+1} turn`;updateUI();syncState();}
+function update(){mv(striker);pocket(striker,false);for(const c of coins){if(!c.active)continue;mv(c);pocket(c,true)}for(const c of coins){if(c.active)col(striker,c)}for(let i=0;i<coins.length;i++)for(let j=i+1;j<coins.length;j++)if(coins[i].active&&coins[j].active)col(coins[i],coins[j]);if(shotInProgress&&!moving())endTurn()}
+function drawAim(){if(!aiming||!aimPoint)return;ctx.setLineDash([7,7]);ctx.strokeStyle='#00e7ff';ctx.beginPath();ctx.moveTo(striker.x,striker.y);ctx.lineTo(aimPoint.x,aimPoint.y);ctx.stroke();ctx.setLineDash([])}
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);drawBoard();coins.forEach(c=>c.active&&piece(c));piece(striker);drawAim();drawFx()}
+function updateUI(){s1.textContent=scores[0];s2.textContent=scores[1];p1.classList.toggle('active',currentPlayer===0);p2.classList.toggle('active',currentPlayer===1)}
+function getPos(e){const t=e.touches?e.touches[0]:e,r=canvas.getBoundingClientRect();return{x:(t.clientX-r.left)*(canvas.width/r.width),y:(t.clientY-r.top)*(canvas.height/r.height)}}
+function canShoot(){if(shotInProgress||moving())return false; if(!online) return true; return myPlayerIndex===currentPlayer;}
+function startAim(e){if(!canShoot())return;const m=getPos(e);if(Math.hypot(m.x-striker.x,m.y-striker.y)<=striker.r+8){aiming=true;aimPoint=m;statusEl.textContent='Release to shoot';}}
+function moveAim(e){if(!aiming)return;aimPoint=getPos(e)}
+function shoot(){if(!aiming||!aimPoint)return;const dx=striker.x-aimPoint.x,dy=striker.y-aimPoint.y,p=Math.min(19,Math.hypot(dx,dy)*.12),a=Math.atan2(dy,dx);striker.vx=Math.cos(a)*p;striker.vy=Math.sin(a)*p;aiming=false;aimPoint=null;shotInProgress=true;statusEl.textContent='Pieces moving...';play('shoot');syncState()}
+canvas.addEventListener('mousedown',startAim);canvas.addEventListener('mousemove',moveAim);canvas.addEventListener('mouseup',shoot);canvas.addEventListener('touchstart',e=>{e.preventDefault();startAim(e)},{passive:false});canvas.addEventListener('touchmove',e=>{e.preventDefault();moveAim(e)},{passive:false});canvas.addEventListener('touchend',e=>{e.preventDefault();shoot()},{passive:false});
+const ac = new (window.AudioContext||window.webkitAudioContext)(); function beep(f,d,t='sine',v=.03){const o=ac.createOscillator(),g=ac.createGain();o.type=t;o.frequency.value=f;g.gain.value=v;o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+d)} function play(k){if(ac.state==='suspended')ac.resume();if(k==='shoot')beep(220,.06,'triangle',.06);if(k==='hit')beep(430,.02,'square',.018);if(k==='wall')beep(240,.015,'sine',.014);if(k==='pocket'){beep(520,.05,'triangle',.05);setTimeout(()=>beep(660,.06,'triangle',.04),20)}if(k==='foul')beep(130,.12,'sawtooth',.04)}
+function syncState(){if(!online||!socket) return;socket.emit('sync-state',{currentPlayer,scores,coins,striker,queenNeedsCover,queenOwner,status:statusEl.textContent});}
+function applyState(st){currentPlayer=st.currentPlayer;scores=st.scores;queenNeedsCover=st.queenNeedsCover;queenOwner=st.queenOwner;statusEl.textContent=st.status||statusEl.textContent;for(let i=0;i<coins.length;i++)Object.assign(coins[i],st.coins[i]);Object.assign(striker,st.striker);updateUI();}
+
+document.getElementById('joinBtn').onclick=()=>{socket=io();const room=document.getElementById('roomId').value||'global';socket.emit('join-room',room);online=true;socket.on('joined',d=>{myPlayerIndex=d.playerIndex;statusEl.textContent=`Joined ${d.roomId} as Player ${myPlayerIndex+1}`});socket.on('players-update',d=>statusEl.textContent=`Players in room: ${d.count}`);socket.on('start-match',d=>{statusEl.textContent=d.status;buildCoins();resetStriker();scores=[0,0];currentPlayer=0;updateUI();});socket.on('state-update',applyState);socket.on('turn-update',turn=>{currentPlayer=turn;updateUI();});socket.on('opponent-left',()=>statusEl.textContent='Opponent disconnected');socket.on('room-full',()=>statusEl.textContent='Room is full (2/2)');}
+
+document.getElementById('localBtn').onclick=()=>{online=false;statusEl.textContent='Local 2-player mode active';};
+function loop(){update();draw();requestAnimationFrame(loop)}
+buildCoins();resetStriker();updateUI();loop();
+</script>
+</body>
+</html>
