@@ -3,535 +3,76 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Carrom Pro (Canvas)</title>
+  <title>Carrom Neon Arena - Online Multiplayer</title>
   <style>
-    :root {
-      --bg1: #262a33;
-      --bg2: #14171c;
-      --wood1: #9a6544;
-      --wood2: #6e442b;
-      --board1: #e8c89f;
-      --board2: #ce9f6f;
-      --line: #5c331b;
-      --accent: #63e0ef;
-      --text: #f8f8f8;
-      --queen: #d83652;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: radial-gradient(circle at top, var(--bg1), var(--bg2));
-      color: var(--text);
-      font-family: Arial, Helvetica, sans-serif;
-      padding: 18px;
-    }
-    .wrap { width: min(94vw, 780px); }
-    h1 { margin: 0 0 10px; font-size: clamp(1.2rem, 2.3vw, 1.8rem); text-align: center; }
-    .hud {
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      align-items: center;
-      gap: 8px;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      border-radius: 12px;
-      padding: 10px 14px;
-      margin-bottom: 12px;
-      font-size: 0.95rem;
-    }
-    .player { opacity: 0.75; }
-    .player.active { opacity: 1; color: var(--accent); font-weight: bold; }
-    .center { text-align: center; font-size: 0.9rem; }
-    canvas {
-      width: 100%;
-      aspect-ratio: 1 / 1;
-      border-radius: 14px;
-      display: block;
-      background: #352517;
-      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45), inset 0 2px 0 rgba(255, 255, 255, 0.14);
-      cursor: crosshair;
-      touch-action: none;
-      user-select: none;
-    }
-    .tip { margin-top: 10px; text-align: center; opacity: 0.9; font-size: 0.9rem; }
+    :root { --bg:#070915; --panel:#10162f; --neon:#00e7ff; --pink:#ff2fa5; --text:#eaf4ff; }
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,sans-serif;background:radial-gradient(circle at top,#12193a,var(--bg));color:var(--text);padding:14px}
+    .wrap{max-width:860px;margin:auto}.top{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;background:rgba(255,255,255,.05);border:1px solid rgba(0,231,255,.35);padding:10px;border-radius:12px;box-shadow:0 0 16px rgba(0,231,255,.2)}
+    .player.active{color:var(--neon);font-weight:700;text-shadow:0 0 8px var(--neon)} #p2{text-align:right}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.toolbar input,.toolbar button{padding:8px 10px;border-radius:8px;border:none}
+    .toolbar button{background:linear-gradient(90deg,var(--neon),var(--pink));color:#001;font-weight:700;cursor:pointer}
+    canvas{width:100%;aspect-ratio:1;border-radius:16px;display:block;background:#120e0b;touch-action:none;box-shadow:0 0 26px rgba(255,47,165,.25),0 0 30px rgba(0,231,255,.2)}
+    .small{opacity:.86;font-size:.9rem}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Carrom Pro 😎 (Canvas + Physics)</h1>
-    <div class="hud">
-      <div id="p1" class="player active">P1: <strong id="score1">0</strong></div>
-      <div class="center" id="status">Player 1: drag from striker to shoot</div>
-      <div id="p2" class="player" style="text-align:right;">P2: <strong id="score2">0</strong></div>
-    </div>
-    <canvas id="gameCanvas" width="740" height="740"></canvas>
-    <div class="tip">Shoot by dragging from striker. Pocket queen then cover it with your coin!</div>
+<div class="wrap">
+  <h2>🎮 Carrom Neon Arena (Online + Mobile)</h2>
+  <div class="toolbar">
+    <input id="roomId" placeholder="Room ID (ex: sbk-room)" />
+    <button id="joinBtn">Join Online Room</button>
+    <button id="localBtn">Play Local 2P</button>
   </div>
+  <div class="top">
+    <div id="p1" class="player active">P1: <strong id="s1">0</strong></div>
+    <div id="status">Join room for online multiplayer</div>
+    <div id="p2" class="player">P2: <strong id="s2">0</strong></div>
+  </div>
+  <canvas id="c" width="760" height="760"></canvas>
+  <p class="small">Mobile: touch and drag on striker to shoot. Queen cover rule enabled. Sound + neon effects on.</p>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const p1=document.getElementById('p1'),p2=document.getElementById('p2'),s1=document.getElementById('s1'),s2=document.getElementById('s2');
+const board={x:90,y:90,size:580,pocketR:24,bounce:.9}; const friction=.992, stop=.03, strikerR=15, coinR=11;
+const striker={x:0,y:0,r:strikerR,vx:0,vy:0,color:'#f5f5f5',kind:'striker'}; const coins=[]; const effects=[];
+let scores=[0,0],currentPlayer=0,aiming=false,aimPoint=null,shotInProgress=false,turnPocketedCoin=false,turnPocketedQueen=false,queenNeedsCover=false,queenOwner=null;
+let online=false,myPlayerIndex=0,socket=null;
 
-  <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
+function buildCoins(){coins.length=0;const cx=board.x+board.size/2,cy=board.y+board.size/2,g=coinR*2+2;[{x:0,y:0,c:'#ff2f6d',k:'queen'},{x:g,y:0,c:'#111',k:'black'},{x:-g,y:0,c:'#f6deb8',k:'white'},{x:g/2,y:g*.86,c:'#111',k:'black'},{x:-g/2,y:g*.86,c:'#f6deb8',k:'white'},{x:g/2,y:-g*.86,c:'#111',k:'black'},{x:-g/2,y:-g*.86,c:'#f6deb8',k:'white'},{x:0,y:g*1.72,c:'#111',k:'black'},{x:0,y:-g*1.72,c:'#f6deb8',k:'white'}].forEach(o=>coins.push({x:cx+o.x,y:cy+o.y,r:coinR,vx:0,vy:0,color:o.c,kind:o.k,active:true}));}
+function resetStriker(){striker.x=board.x+board.size/2;striker.y=board.y+board.size-68;striker.vx=striker.vy=0;}
+const pockets=()=>[{x:board.x,y:board.y},{x:board.x+board.size,y:board.y},{x:board.x,y:board.y+board.size},{x:board.x+board.size,y:board.y+board.size}];
 
-    const statusEl = document.getElementById('status');
-    const p1El = document.getElementById('p1');
-    const p2El = document.getElementById('p2');
-    const score1El = document.getElementById('score1');
-    const score2El = document.getElementById('score2');
+function drawBoard(){ctx.fillStyle='#51321f';ctx.fillRect(30,30,700,700);let g=ctx.createLinearGradient(board.x,board.y,board.x+board.size,board.y+board.size);g.addColorStop(0,'#e6bf95');g.addColorStop(1,'#c1864f');ctx.fillStyle=g;ctx.fillRect(board.x,board.y,board.size,board.size);ctx.strokeStyle='#00e7ff';ctx.lineWidth=3;ctx.strokeRect(board.x,board.y,board.size,board.size);ctx.shadowColor='#00e7ff';ctx.shadowBlur=8;pockets().forEach(p=>{ctx.fillStyle='#070707';ctx.beginPath();ctx.arc(p.x,p.y,board.pocketR,0,Math.PI*2);ctx.fill();});ctx.shadowBlur=0;ctx.beginPath();ctx.arc(board.x+board.size/2,board.y+board.size/2,46,0,Math.PI*2);ctx.stroke();}
+function piece(p){const rg=ctx.createRadialGradient(p.x-3,p.y-3,2,p.x,p.y,p.r);rg.addColorStop(0,'#fff');rg.addColorStop(1,p.color);ctx.fillStyle=rg;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();}
+function mv(p){p.x+=p.vx;p.y+=p.vy;p.vx*=friction;p.vy*=friction;if(Math.abs(p.vx)<stop)p.vx=0;if(Math.abs(p.vy)<stop)p.vy=0;const l=board.x+p.r,r=board.x+board.size-p.r,t=board.y+p.r,b=board.y+board.size-p.r;if(p.x<l){p.x=l;p.vx*=-board.bounce;play('wall')}if(p.x>r){p.x=r;p.vx*=-board.bounce;play('wall')}if(p.y<t){p.y=t;p.vy*=-board.bounce;play('wall')}if(p.y>b){p.y=b;p.vy*=-board.bounce;play('wall')}}
+function col(a,b){const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy),m=a.r+b.r;if(!d||d>=m)return;const nx=dx/d,ny=dy/d,o=(m-d)/2;a.x-=nx*o;a.y-=ny*o;b.x+=nx*o;b.y+=ny*o;const rvx=b.vx-a.vx,rvy=b.vy-a.vy,vn=rvx*nx+rvy*ny;if(vn>0)return;const j=-(1+.93)*vn/2,ix=j*nx,iy=j*ny;a.vx-=ix;a.vy-=iy;b.vx+=ix;b.vy+=iy;play('hit')}
+function fx(t,x,y,c='#fff'){effects.push({t,x,y,l:45,c})}
+function drawFx(){for(let i=effects.length-1;i>=0;i--){const e=effects[i];e.l--;e.y-=.35;if(e.l<=0){effects.splice(i,1);continue}ctx.globalAlpha=e.l/45;ctx.fillStyle=e.c;ctx.fillText(e.t,e.x,e.y);ctx.globalAlpha=1}}
+function pocket(piece,isCoin){for(const p of pockets()){if(Math.hypot(piece.x-p.x,piece.y-p.y)<board.pocketR-2){if(isCoin){piece.active=false;piece.vx=piece.vy=0;turnPocketedCoin=true;play('pocket');if(piece.kind==='queen'){turnPocketedQueen=true;queenNeedsCover=true;queenOwner=currentPlayer;fx('QUEEN!',piece.x,piece.y,'#ff76bc')}else{scores[currentPlayer]+=10;fx('+10',piece.x,piece.y,'#8eff9f')}updateUI()}else{resetStriker();scores[currentPlayer]=Math.max(0,scores[currentPlayer]-5);fx('-5',piece.x,piece.y,'#ffb5b5');updateUI();play('foul')}return true}}return false}
+const moving=()=>striker.vx||striker.vy||coins.some(c=>c.active&&(c.vx||c.vy));
+function endTurn(){shotInProgress=false;if(queenNeedsCover&&queenOwner===currentPlayer){if(turnPocketedCoin){queenNeedsCover=false;queenOwner=null;scores[currentPlayer]+=50;fx('+50 QUEEN',280,130,'#ff94cb');updateUI()}else{const q=coins.find(c=>c.kind==='queen');q.active=true;q.x=board.x+board.size/2;q.y=board.y+board.size/2;q.vx=q.vy=0;queenNeedsCover=false;queenOwner=null;fx('Queen Respot',300,130,'#ffd0ea')}}if(!turnPocketedCoin){currentPlayer=(currentPlayer+1)%2;if(online&&socket&&myPlayerIndex===((currentPlayer+1)%2))socket.emit('pass-turn');}turnPocketedCoin=false;turnPocketedQueen=false;resetStriker();statusEl.textContent=`Player ${currentPlayer+1} turn`;updateUI();syncState();}
+function update(){mv(striker);pocket(striker,false);for(const c of coins){if(!c.active)continue;mv(c);pocket(c,true)}for(const c of coins){if(c.active)col(striker,c)}for(let i=0;i<coins.length;i++)for(let j=i+1;j<coins.length;j++)if(coins[i].active&&coins[j].active)col(coins[i],coins[j]);if(shotInProgress&&!moving())endTurn()}
+function drawAim(){if(!aiming||!aimPoint)return;ctx.setLineDash([7,7]);ctx.strokeStyle='#00e7ff';ctx.beginPath();ctx.moveTo(striker.x,striker.y);ctx.lineTo(aimPoint.x,aimPoint.y);ctx.stroke();ctx.setLineDash([])}
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);drawBoard();coins.forEach(c=>c.active&&piece(c));piece(striker);drawAim();drawFx()}
+function updateUI(){s1.textContent=scores[0];s2.textContent=scores[1];p1.classList.toggle('active',currentPlayer===0);p2.classList.toggle('active',currentPlayer===1)}
+function getPos(e){const t=e.touches?e.touches[0]:e,r=canvas.getBoundingClientRect();return{x:(t.clientX-r.left)*(canvas.width/r.width),y:(t.clientY-r.top)*(canvas.height/r.height)}}
+function canShoot(){if(shotInProgress||moving())return false; if(!online) return true; return myPlayerIndex===currentPlayer;}
+function startAim(e){if(!canShoot())return;const m=getPos(e);if(Math.hypot(m.x-striker.x,m.y-striker.y)<=striker.r+8){aiming=true;aimPoint=m;statusEl.textContent='Release to shoot';}}
+function moveAim(e){if(!aiming)return;aimPoint=getPos(e)}
+function shoot(){if(!aiming||!aimPoint)return;const dx=striker.x-aimPoint.x,dy=striker.y-aimPoint.y,p=Math.min(19,Math.hypot(dx,dy)*.12),a=Math.atan2(dy,dx);striker.vx=Math.cos(a)*p;striker.vy=Math.sin(a)*p;aiming=false;aimPoint=null;shotInProgress=true;statusEl.textContent='Pieces moving...';play('shoot');syncState()}
+canvas.addEventListener('mousedown',startAim);canvas.addEventListener('mousemove',moveAim);canvas.addEventListener('mouseup',shoot);canvas.addEventListener('touchstart',e=>{e.preventDefault();startAim(e)},{passive:false});canvas.addEventListener('touchmove',e=>{e.preventDefault();moveAim(e)},{passive:false});canvas.addEventListener('touchend',e=>{e.preventDefault();shoot()},{passive:false});
+const ac = new (window.AudioContext||window.webkitAudioContext)(); function beep(f,d,t='sine',v=.03){const o=ac.createOscillator(),g=ac.createGain();o.type=t;o.frequency.value=f;g.gain.value=v;o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+d)} function play(k){if(ac.state==='suspended')ac.resume();if(k==='shoot')beep(220,.06,'triangle',.06);if(k==='hit')beep(430,.02,'square',.018);if(k==='wall')beep(240,.015,'sine',.014);if(k==='pocket'){beep(520,.05,'triangle',.05);setTimeout(()=>beep(660,.06,'triangle',.04),20)}if(k==='foul')beep(130,.12,'sawtooth',.04)}
+function syncState(){if(!online||!socket) return;socket.emit('sync-state',{currentPlayer,scores,coins,striker,queenNeedsCover,queenOwner,status:statusEl.textContent});}
+function applyState(st){currentPlayer=st.currentPlayer;scores=st.scores;queenNeedsCover=st.queenNeedsCover;queenOwner=st.queenOwner;statusEl.textContent=st.status||statusEl.textContent;for(let i=0;i<coins.length;i++)Object.assign(coins[i],st.coins[i]);Object.assign(striker,st.striker);updateUI();}
 
-    const board = { x: 80, y: 80, size: 580, pocketR: 24, bounce: 0.9 };
-    const friction = 0.992;
-    const stopEpsilon = 0.03;
-    const strikerR = 15;
-    const coinR = 11;
+document.getElementById('joinBtn').onclick=()=>{socket=io();const room=document.getElementById('roomId').value||'global';socket.emit('join-room',room);online=true;socket.on('joined',d=>{myPlayerIndex=d.playerIndex;statusEl.textContent=`Joined ${d.roomId} as Player ${myPlayerIndex+1}`});socket.on('players-update',d=>statusEl.textContent=`Players in room: ${d.count}`);socket.on('start-match',d=>{statusEl.textContent=d.status;buildCoins();resetStriker();scores=[0,0];currentPlayer=0;updateUI();});socket.on('state-update',applyState);socket.on('turn-update',turn=>{currentPlayer=turn;updateUI();});socket.on('opponent-left',()=>statusEl.textContent='Opponent disconnected');socket.on('room-full',()=>statusEl.textContent='Room is full (2/2)');}
 
-    let aiming = false;
-    let aimPoint = null;
-    let currentPlayer = 0;
-    const scores = [0, 0];
-
-    // Turn / queen state
-    let turnPocketedCoin = false;
-    let turnPocketedQueen = false;
-    let queenNeedsCover = false;
-    let queenOwner = null;
-
-    const effects = [];
-
-    const striker = { x: 0, y: 0, r: strikerR, vx: 0, vy: 0, color: '#f5f5f5', kind: 'striker' };
-    const coins = [];
-
-    function buildCoins() {
-      coins.length = 0;
-      const cx = board.x + board.size / 2;
-      const cy = board.y + board.size / 2;
-      const gap = coinR * 2 + 2;
-
-      const setup = [
-        { x: 0, y: 0, color: '#d83652', kind: 'queen' },
-        { x: gap, y: 0, color: '#111', kind: 'black' },
-        { x: -gap, y: 0, color: '#f6deb8', kind: 'white' },
-        { x: gap / 2, y: gap * 0.86, color: '#111', kind: 'black' },
-        { x: -gap / 2, y: gap * 0.86, color: '#f6deb8', kind: 'white' },
-        { x: gap / 2, y: -gap * 0.86, color: '#111', kind: 'black' },
-        { x: -gap / 2, y: -gap * 0.86, color: '#f6deb8', kind: 'white' },
-        { x: 0, y: gap * 1.72, color: '#111', kind: 'black' },
-        { x: 0, y: -gap * 1.72, color: '#f6deb8', kind: 'white' }
-      ];
-
-      setup.forEach(c => coins.push({
-        x: cx + c.x,
-        y: cy + c.y,
-        r: coinR,
-        vx: 0,
-        vy: 0,
-        color: c.color,
-        kind: c.kind,
-        active: true
-      }));
-    }
-
-    function resetStriker() {
-      striker.x = board.x + board.size / 2;
-      striker.y = board.y + board.size - 68;
-      striker.vx = 0;
-      striker.vy = 0;
-    }
-
-    function pockets() {
-      return [
-        { x: board.x, y: board.y },
-        { x: board.x + board.size, y: board.y },
-        { x: board.x, y: board.y + board.size },
-        { x: board.x + board.size, y: board.y + board.size }
-      ];
-    }
-
-    function drawBoard() {
-      roundRect(30, 30, 680, 680, 20);
-      const frame = ctx.createLinearGradient(30, 30, 710, 710);
-      frame.addColorStop(0, 'var(--wood1)');
-      frame.addColorStop(1, 'var(--wood2)');
-      ctx.fillStyle = '#8b593c';
-      ctx.fill();
-
-      const fill = ctx.createLinearGradient(board.x, board.y, board.x + board.size, board.y + board.size);
-      fill.addColorStop(0, '#ecd0aa');
-      fill.addColorStop(1, '#c9925f');
-      ctx.fillStyle = fill;
-      ctx.fillRect(board.x, board.y, board.size, board.size);
-
-      ctx.strokeStyle = '#5c331b';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(board.x, board.y, board.size, board.size);
-
-      // Decor lines + center
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(board.x + board.size / 2, board.y + board.size / 2, 48, 0, Math.PI * 2);
-      ctx.stroke();
-
-      const lineGap = 90;
-      ctx.beginPath();
-      ctx.moveTo(board.x + lineGap, board.y + board.size - 60);
-      ctx.lineTo(board.x + board.size - lineGap, board.y + board.size - 60);
-      ctx.moveTo(board.x + lineGap, board.y + 60);
-      ctx.lineTo(board.x + board.size - lineGap, board.y + 60);
-      ctx.stroke();
-
-      ctx.fillStyle = '#111';
-      pockets().forEach(p => {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, board.pocketR, 0, Math.PI * 2);
-        ctx.fill();
-      });
-    }
-
-    function roundRect(x, y, w, h, r) {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + w, y, x + w, y + h, r);
-      ctx.arcTo(x + w, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + w, y, r);
-      ctx.closePath();
-    }
-
-    function shade(hex, d) {
-      const n = parseInt(hex.slice(1), 16);
-      const r = Math.max(0, Math.min(255, (n >> 16) + d));
-      const g = Math.max(0, Math.min(255, ((n >> 8) & 255) + d));
-      const b = Math.max(0, Math.min(255, (n & 255) + d));
-      return `rgb(${r},${g},${b})`;
-    }
-
-    function drawPiece(p) {
-      const g = ctx.createRadialGradient(p.x - 4, p.y - 4, 2, p.x, p.y, p.r);
-      g.addColorStop(0, '#fff');
-      g.addColorStop(0.1, p.color);
-      g.addColorStop(1, shade(p.color, -45));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      if (p.kind === 'queen' && p.active) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r - 3, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-
-    function movePiece(p) {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vx *= friction;
-      p.vy *= friction;
-      if (Math.abs(p.vx) < stopEpsilon) p.vx = 0;
-      if (Math.abs(p.vy) < stopEpsilon) p.vy = 0;
-
-      const l = board.x + p.r;
-      const r = board.x + board.size - p.r;
-      const t = board.y + p.r;
-      const b = board.y + board.size - p.r;
-
-      if (p.x < l) { p.x = l; p.vx *= -board.bounce; playSound('wall'); }
-      if (p.x > r) { p.x = r; p.vx *= -board.bounce; playSound('wall'); }
-      if (p.y < t) { p.y = t; p.vy *= -board.bounce; playSound('wall'); }
-      if (p.y > b) { p.y = b; p.vy *= -board.bounce; playSound('wall'); }
-    }
-
-    function collide(a, b) {
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const dist = Math.hypot(dx, dy);
-      const min = a.r + b.r;
-      if (dist === 0 || dist >= min) return;
-
-      const nx = dx / dist;
-      const ny = dy / dist;
-      const overlap = (min - dist) / 2;
-      a.x -= nx * overlap; a.y -= ny * overlap;
-      b.x += nx * overlap; b.y += ny * overlap;
-
-      const rvx = b.vx - a.vx;
-      const rvy = b.vy - a.vy;
-      const velN = rvx * nx + rvy * ny;
-      if (velN > 0) return;
-
-      const e = 0.93;
-      const j = -(1 + e) * velN / 2;
-      const ix = j * nx;
-      const iy = j * ny;
-      a.vx -= ix; a.vy -= iy;
-      b.vx += ix; b.vy += iy;
-      playSound('hit');
-    }
-
-    function addEffect(text, x, y, color = '#fff') {
-      effects.push({ text, x, y, life: 50, color });
-    }
-
-    function drawEffects() {
-      for (let i = effects.length - 1; i >= 0; i--) {
-        const e = effects[i];
-        e.life -= 1;
-        e.y -= 0.35;
-        if (e.life <= 0) { effects.splice(i, 1); continue; }
-        ctx.globalAlpha = e.life / 50;
-        ctx.fillStyle = e.color;
-        ctx.font = 'bold 16px Arial';
-        ctx.fillText(e.text, e.x, e.y);
-        ctx.globalAlpha = 1;
-      }
-    }
-
-    function checkPocket(piece, isCoin) {
-      for (const p of pockets()) {
-        if (Math.hypot(piece.x - p.x, piece.y - p.y) < board.pocketR - 2) {
-          if (isCoin) {
-            piece.active = false;
-            piece.vx = piece.vy = 0;
-            turnPocketedCoin = true;
-            playSound('pocket');
-
-            if (piece.kind === 'queen') {
-              turnPocketedQueen = true;
-              queenNeedsCover = true;
-              queenOwner = currentPlayer;
-              addEffect('QUEEN!', piece.x, piece.y, '#ff7a91');
-            } else {
-              scores[currentPlayer] += 10;
-              addEffect('+10', piece.x, piece.y, '#8eff9f');
-            }
-            updateScoreUI();
-          } else {
-            resetStriker();
-            scores[currentPlayer] = Math.max(0, scores[currentPlayer] - 5);
-            addEffect('-5', piece.x, piece.y, '#ffaeae');
-            updateScoreUI();
-            playSound('foul');
-          }
-          return true;
-        }
-      }
-      return false;
-    }
-
-    function anyMoving() {
-      if (striker.vx || striker.vy) return true;
-      return coins.some(c => c.active && (c.vx || c.vy));
-    }
-
-    function allStopped() {
-      return !anyMoving();
-    }
-
-    function update() {
-      movePiece(striker);
-      checkPocket(striker, false);
-
-      for (const c of coins) {
-        if (!c.active) continue;
-        movePiece(c);
-        checkPocket(c, true);
-      }
-
-      for (const c of coins) {
-        if (!c.active) continue;
-        collide(striker, c);
-      }
-      for (let i = 0; i < coins.length; i++) {
-        if (!coins[i].active) continue;
-        for (let j = i + 1; j < coins.length; j++) {
-          if (!coins[j].active) continue;
-          collide(coins[i], coins[j]);
-        }
-      }
-
-      if (shotInProgress && allStopped()) {
-        endTurn();
-      }
-    }
-
-    function drawAim() {
-      if (!aiming || !aimPoint) return;
-      ctx.setLineDash([7, 7]);
-      ctx.strokeStyle = 'rgba(99,224,239,0.9)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(striker.x, striker.y);
-      ctx.lineTo(aimPoint.x, aimPoint.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawBoard();
-      coins.forEach(c => c.active && drawPiece(c));
-      drawPiece(striker);
-      drawAim();
-      drawEffects();
-    }
-
-    function updateScoreUI() {
-      score1El.textContent = scores[0];
-      score2El.textContent = scores[1];
-      p1El.classList.toggle('active', currentPlayer === 0);
-      p2El.classList.toggle('active', currentPlayer === 1);
-    }
-
-    function respotQueen() {
-      const queen = coins.find(c => c.kind === 'queen');
-      if (!queen) return;
-      queen.active = true;
-      queen.x = board.x + board.size / 2;
-      queen.y = board.y + board.size / 2;
-      queen.vx = queen.vy = 0;
-      addEffect('Queen back!', queen.x - 26, queen.y - 16, '#ffd3dc');
-    }
-
-    function nextPlayer() {
-      currentPlayer = (currentPlayer + 1) % 2;
-      updateScoreUI();
-    }
-
-    function endTurn() {
-      shotInProgress = false;
-
-      // Queen cover rule
-      if (queenNeedsCover && queenOwner === currentPlayer) {
-        if (turnPocketedQueen && turnPocketedCoin) {
-          // Pocketed queen + one more coin in same shot -> covered
-          queenNeedsCover = false;
-          queenOwner = null;
-          scores[currentPlayer] += 50;
-          addEffect('+50 QUEEN COVER', board.x + 180, board.y + 55, '#ff8ea3');
-          updateScoreUI();
-        } else if (!turnPocketedQueen && turnPocketedCoin) {
-          // Covered on immediate next shot
-          queenNeedsCover = false;
-          queenOwner = null;
-          scores[currentPlayer] += 50;
-          addEffect('+50 QUEEN COVER', board.x + 180, board.y + 55, '#ff8ea3');
-          updateScoreUI();
-        } else if (!turnPocketedQueen && !turnPocketedCoin) {
-          // Failed cover attempt: respot queen
-          queenNeedsCover = false;
-          queenOwner = null;
-          respotQueen();
-        }
-      }
-
-      // Turn rule: if no coin pocketed, switch turn.
-      if (!turnPocketedCoin) nextPlayer();
-
-      statusEl.textContent = `Player ${currentPlayer + 1}: drag from striker to shoot`;
-      turnPocketedCoin = false;
-      turnPocketedQueen = false;
-      resetStriker();
-
-      // End game check
-      const remaining = coins.filter(c => c.active && c.kind !== 'queen').length;
-      if (remaining === 0) {
-        const winner = scores[0] === scores[1] ? 'Draw' : (scores[0] > scores[1] ? 'Player 1 wins!' : 'Player 2 wins!');
-        statusEl.textContent = `Game Over: ${winner}`;
-      }
-    }
-
-    let shotInProgress = false;
-
-    function getMousePos(e) {
-      const r = canvas.getBoundingClientRect();
-      return {
-        x: (e.clientX - r.left) * (canvas.width / r.width),
-        y: (e.clientY - r.top) * (canvas.height / r.height)
-      };
-    }
-
-    function canShoot() {
-      return !shotInProgress && !anyMoving();
-    }
-
-    canvas.addEventListener('mousedown', e => {
-      if (!canShoot()) return;
-      const m = getMousePos(e);
-      if (Math.hypot(m.x - striker.x, m.y - striker.y) <= striker.r + 8) {
-        aiming = true;
-        aimPoint = m;
-        statusEl.textContent = `Player ${currentPlayer + 1}: release to shoot`;
-      }
-    });
-
-    canvas.addEventListener('mousemove', e => {
-      if (!aiming) return;
-      aimPoint = getMousePos(e);
-    });
-
-    function shootFromAim() {
-      if (!aiming || !aimPoint) return;
-      const dx = striker.x - aimPoint.x;
-      const dy = striker.y - aimPoint.y;
-      const power = Math.min(19, Math.hypot(dx, dy) * 0.12);
-      const angle = Math.atan2(dy, dx);
-      striker.vx = Math.cos(angle) * power;
-      striker.vy = Math.sin(angle) * power;
-      aiming = false;
-      aimPoint = null;
-      shotInProgress = true;
-      statusEl.textContent = `Player ${currentPlayer + 1}: pieces moving...`;
-      playSound('shoot');
-    }
-
-    canvas.addEventListener('mouseup', shootFromAim);
-    canvas.addEventListener('mouseleave', () => {
-      if (!aiming) return;
-      aiming = false;
-      aimPoint = null;
-      statusEl.textContent = `Player ${currentPlayer + 1}: drag from striker to shoot`;
-    });
-
-    // Simple sound effects via WebAudio
-    const audio = new (window.AudioContext || window.webkitAudioContext)();
-    function beep(freq, duration, type = 'sine', volume = 0.04) {
-      const osc = audio.createOscillator();
-      const gain = audio.createGain();
-      osc.type = type;
-      osc.frequency.value = freq;
-      gain.gain.value = volume;
-      osc.connect(gain);
-      gain.connect(audio.destination);
-      osc.start();
-      osc.stop(audio.currentTime + duration);
-    }
-
-    function playSound(kind) {
-      if (audio.state === 'suspended') audio.resume();
-      if (kind === 'shoot') beep(220, 0.07, 'triangle', 0.06);
-      if (kind === 'hit') beep(400, 0.02, 'square', 0.02);
-      if (kind === 'wall') beep(240, 0.015, 'sine', 0.015);
-      if (kind === 'pocket') { beep(520, 0.05, 'triangle', 0.05); setTimeout(() => beep(660, 0.06, 'triangle', 0.04), 20); }
-      if (kind === 'foul') beep(130, 0.12, 'sawtooth', 0.04);
-    }
-
-    function loop() {
-      update();
-      draw();
-      requestAnimationFrame(loop);
-    }
-
-    buildCoins();
-    resetStriker();
-    updateScoreUI();
-    loop();
-  </script>
+document.getElementById('localBtn').onclick=()=>{online=false;statusEl.textContent='Local 2-player mode active';};
+function loop(){update();draw();requestAnimationFrame(loop)}
+buildCoins();resetStriker();updateUI();loop();
+</script>
 </body>
 </html>
