@@ -3,186 +3,144 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Style Carrom Board</title>
+  <title>Carrom Pro (Canvas)</title>
   <style>
     :root {
-      --bg: #1f2126;
-      --wood-outer: #8a5a3b;
-      --wood-inner: #d5b088;
-      --line: #613b20;
-      --pocket: #111;
-      --text: #f5f5f5;
-      --accent: #52d1dc;
+      --bg1: #262a33;
+      --bg2: #14171c;
+      --wood1: #9a6544;
+      --wood2: #6e442b;
+      --board1: #e8c89f;
+      --board2: #ce9f6f;
+      --line: #5c331b;
+      --accent: #63e0ef;
+      --text: #f8f8f8;
+      --queen: #d83652;
     }
-
     * { box-sizing: border-box; }
-
     body {
       margin: 0;
       min-height: 100vh;
       display: grid;
       place-items: center;
-      background: radial-gradient(circle at top, #2d313a, var(--bg));
+      background: radial-gradient(circle at top, var(--bg1), var(--bg2));
       color: var(--text);
       font-family: Arial, Helvetica, sans-serif;
-      padding: 20px;
+      padding: 18px;
     }
-
-    .game-wrap {
-      width: min(92vw, 760px);
-      text-align: center;
-    }
-
-    h1 {
-      margin: 0 0 10px;
-      font-size: clamp(1.2rem, 2.4vw, 1.8rem);
-    }
-
+    .wrap { width: min(94vw, 780px); }
+    h1 { margin: 0 0 10px; font-size: clamp(1.2rem, 2.3vw, 1.8rem); text-align: center; }
     .hud {
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
       align-items: center;
-      margin-bottom: 12px;
+      gap: 8px;
       background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 12px;
       padding: 10px 14px;
+      margin-bottom: 12px;
       font-size: 0.95rem;
     }
-
+    .player { opacity: 0.75; }
+    .player.active { opacity: 1; color: var(--accent); font-weight: bold; }
+    .center { text-align: center; font-size: 0.9rem; }
     canvas {
       width: 100%;
-      height: auto;
       aspect-ratio: 1 / 1;
-      display: block;
       border-radius: 14px;
-      box-shadow:
-        0 8px 24px rgba(0, 0, 0, 0.45),
-        inset 0 2px 0 rgba(255, 255, 255, 0.15);
+      display: block;
+      background: #352517;
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45), inset 0 2px 0 rgba(255, 255, 255, 0.14);
       cursor: crosshair;
-      user-select: none;
       touch-action: none;
-      background: #3b2a1e;
+      user-select: none;
     }
-
-    .tip {
-      margin-top: 10px;
-      color: #d8d8d8;
-      font-size: 0.9rem;
-    }
+    .tip { margin-top: 10px; text-align: center; opacity: 0.9; font-size: 0.9rem; }
   </style>
 </head>
 <body>
-  <div class="game-wrap">
-    <h1>3D Carrom Board (Canvas)</h1>
+  <div class="wrap">
+    <h1>Carrom Pro 😎 (Canvas + Physics)</h1>
     <div class="hud">
-      <div>Score: <strong id="score">0</strong></div>
-      <div id="status">Aim and drag from striker to shoot</div>
+      <div id="p1" class="player active">P1: <strong id="score1">0</strong></div>
+      <div class="center" id="status">Player 1: drag from striker to shoot</div>
+      <div id="p2" class="player" style="text-align:right;">P2: <strong id="score2">0</strong></div>
     </div>
-    <canvas id="gameCanvas" width="700" height="700"></canvas>
-    <p class="tip">Tip: Click and drag from the striker. Longer drag = stronger shot.</p>
+    <canvas id="gameCanvas" width="740" height="740"></canvas>
+    <div class="tip">Shoot by dragging from striker. Pocket queen then cover it with your coin!</div>
   </div>
 
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
-    const scoreEl = document.getElementById('score');
+
     const statusEl = document.getElementById('status');
+    const p1El = document.getElementById('p1');
+    const p2El = document.getElementById('p2');
+    const score1El = document.getElementById('score1');
+    const score2El = document.getElementById('score2');
 
-    const board = {
-      x: 70,
-      y: 70,
-      size: 560,
-      pocketRadius: 22,
-      cushionBounce: 0.9
-    };
-
+    const board = { x: 80, y: 80, size: 580, pocketR: 24, bounce: 0.9 };
     const friction = 0.992;
-    const stopThreshold = 0.03;
-    const strikerRadius = 14;
-    const coinRadius = 11;
+    const stopEpsilon = 0.03;
+    const strikerR = 15;
+    const coinR = 11;
 
-    let score = 0;
     let aiming = false;
-    let mouse = { x: 0, y: 0 };
-    let shotLine = null;
+    let aimPoint = null;
+    let currentPlayer = 0;
+    const scores = [0, 0];
 
-    const striker = {
-      x: board.x + board.size / 2,
-      y: board.y + board.size - 65,
-      r: strikerRadius,
-      vx: 0,
-      vy: 0,
-      color: '#f7f7f7'
-    };
+    // Turn / queen state
+    let turnPocketedCoin = false;
+    let turnPocketedQueen = false;
+    let queenNeedsCover = false;
+    let queenOwner = null;
 
+    const effects = [];
+
+    const striker = { x: 0, y: 0, r: strikerR, vx: 0, vy: 0, color: '#f5f5f5', kind: 'striker' };
     const coins = [];
 
-    function createCoins() {
+    function buildCoins() {
       coins.length = 0;
       const cx = board.x + board.size / 2;
       const cy = board.y + board.size / 2;
-      const gap = coinRadius * 2 + 2;
+      const gap = coinR * 2 + 2;
 
-      const colors = ['#1f1f1f', '#f9d9a5', '#1f1f1f', '#f9d9a5', '#e03c54', '#f9d9a5', '#1f1f1f'];
-      const positions = [
-        [0, 0],
-        [gap, 0],
-        [-gap, 0],
-        [gap / 2, gap * 0.86],
-        [-gap / 2, gap * 0.86],
-        [gap / 2, -gap * 0.86],
-        [-gap / 2, -gap * 0.86]
+      const setup = [
+        { x: 0, y: 0, color: '#d83652', kind: 'queen' },
+        { x: gap, y: 0, color: '#111', kind: 'black' },
+        { x: -gap, y: 0, color: '#f6deb8', kind: 'white' },
+        { x: gap / 2, y: gap * 0.86, color: '#111', kind: 'black' },
+        { x: -gap / 2, y: gap * 0.86, color: '#f6deb8', kind: 'white' },
+        { x: gap / 2, y: -gap * 0.86, color: '#111', kind: 'black' },
+        { x: -gap / 2, y: -gap * 0.86, color: '#f6deb8', kind: 'white' },
+        { x: 0, y: gap * 1.72, color: '#111', kind: 'black' },
+        { x: 0, y: -gap * 1.72, color: '#f6deb8', kind: 'white' }
       ];
 
-      for (let i = 0; i < positions.length; i++) {
-        coins.push({
-          x: cx + positions[i][0],
-          y: cy + positions[i][1],
-          r: coinRadius,
-          vx: 0,
-          vy: 0,
-          color: colors[i],
-          active: true
-        });
-      }
+      setup.forEach(c => coins.push({
+        x: cx + c.x,
+        y: cy + c.y,
+        r: coinR,
+        vx: 0,
+        vy: 0,
+        color: c.color,
+        kind: c.kind,
+        active: true
+      }));
     }
 
-    function drawBoard() {
-      // Outer wood frame
-      ctx.fillStyle = '#8a5a3b';
-      roundRect(ctx, 25, 25, 650, 650, 18);
-      ctx.fill();
-
-      // Inner board with slight gradient for 3D style
-      const grad = ctx.createLinearGradient(board.x, board.y, board.x + board.size, board.y + board.size);
-      grad.addColorStop(0, '#e9caa2');
-      grad.addColorStop(1, '#cfa172');
-      ctx.fillStyle = grad;
-      ctx.fillRect(board.x, board.y, board.size, board.size);
-
-      // Borders and center circle
-      ctx.strokeStyle = '#613b20';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(board.x, board.y, board.size, board.size);
-
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(board.x + board.size / 2, board.y + board.size / 2, 45, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Pockets
-      const p = board.pocketRadius;
-      const pockets = getPocketCenters();
-      ctx.fillStyle = '#111';
-      pockets.forEach(pt => {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, p, 0, Math.PI * 2);
-        ctx.fill();
-      });
+    function resetStriker() {
+      striker.x = board.x + board.size / 2;
+      striker.y = board.y + board.size - 68;
+      striker.vx = 0;
+      striker.vy = 0;
     }
 
-    function getPocketCenters() {
+    function pockets() {
       return [
         { x: board.x, y: board.y },
         { x: board.x + board.size, y: board.y },
@@ -191,125 +149,175 @@
       ];
     }
 
-    function roundRect(context, x, y, width, height, radius) {
-      context.beginPath();
-      context.moveTo(x + radius, y);
-      context.arcTo(x + width, y, x + width, y + height, radius);
-      context.arcTo(x + width, y + height, x, y + height, radius);
-      context.arcTo(x, y + height, x, y, radius);
-      context.arcTo(x, y, x + width, y, radius);
-      context.closePath();
-    }
-
-    function drawPiece(piece) {
-      const radial = ctx.createRadialGradient(piece.x - 4, piece.y - 4, 2, piece.x, piece.y, piece.r);
-      radial.addColorStop(0, '#fff');
-      radial.addColorStop(0.08, piece.color);
-      radial.addColorStop(1, shadeColor(piece.color, -30));
-
-      ctx.fillStyle = radial;
-      ctx.beginPath();
-      ctx.arc(piece.x, piece.y, piece.r, 0, Math.PI * 2);
+    function drawBoard() {
+      roundRect(30, 30, 680, 680, 20);
+      const frame = ctx.createLinearGradient(30, 30, 710, 710);
+      frame.addColorStop(0, 'var(--wood1)');
+      frame.addColorStop(1, 'var(--wood2)');
+      ctx.fillStyle = '#8b593c';
       ctx.fill();
 
+      const fill = ctx.createLinearGradient(board.x, board.y, board.x + board.size, board.y + board.size);
+      fill.addColorStop(0, '#ecd0aa');
+      fill.addColorStop(1, '#c9925f');
+      ctx.fillStyle = fill;
+      ctx.fillRect(board.x, board.y, board.size, board.size);
+
+      ctx.strokeStyle = '#5c331b';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(board.x, board.y, board.size, board.size);
+
+      // Decor lines + center
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(board.x + board.size / 2, board.y + board.size / 2, 48, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const lineGap = 90;
+      ctx.beginPath();
+      ctx.moveTo(board.x + lineGap, board.y + board.size - 60);
+      ctx.lineTo(board.x + board.size - lineGap, board.y + board.size - 60);
+      ctx.moveTo(board.x + lineGap, board.y + 60);
+      ctx.lineTo(board.x + board.size - lineGap, board.y + 60);
+      ctx.stroke();
+
+      ctx.fillStyle = '#111';
+      pockets().forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, board.pocketR, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function shade(hex, d) {
+      const n = parseInt(hex.slice(1), 16);
+      const r = Math.max(0, Math.min(255, (n >> 16) + d));
+      const g = Math.max(0, Math.min(255, ((n >> 8) & 255) + d));
+      const b = Math.max(0, Math.min(255, (n & 255) + d));
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function drawPiece(p) {
+      const g = ctx.createRadialGradient(p.x - 4, p.y - 4, 2, p.x, p.y, p.r);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(0.1, p.color);
+      g.addColorStop(1, shade(p.color, -45));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1;
       ctx.stroke();
-    }
 
-    function shadeColor(color, percent) {
-      const num = parseInt(color.slice(1), 16);
-      let r = (num >> 16) + percent;
-      let g = ((num >> 8) & 0x00FF) + percent;
-      let b = (num & 0x0000FF) + percent;
-      r = Math.max(0, Math.min(255, r));
-      g = Math.max(0, Math.min(255, g));
-      b = Math.max(0, Math.min(255, b));
-      return `rgb(${r}, ${g}, ${b})`;
-    }
-
-    function movePiece(piece) {
-      piece.x += piece.vx;
-      piece.y += piece.vy;
-      piece.vx *= friction;
-      piece.vy *= friction;
-
-      if (Math.abs(piece.vx) < stopThreshold) piece.vx = 0;
-      if (Math.abs(piece.vy) < stopThreshold) piece.vy = 0;
-
-      // Wall bounce
-      const left = board.x + piece.r;
-      const right = board.x + board.size - piece.r;
-      const top = board.y + piece.r;
-      const bottom = board.y + board.size - piece.r;
-
-      if (piece.x < left) {
-        piece.x = left;
-        piece.vx *= -board.cushionBounce;
-      } else if (piece.x > right) {
-        piece.x = right;
-        piece.vx *= -board.cushionBounce;
-      }
-
-      if (piece.y < top) {
-        piece.y = top;
-        piece.vy *= -board.cushionBounce;
-      } else if (piece.y > bottom) {
-        piece.y = bottom;
-        piece.vy *= -board.cushionBounce;
+      if (p.kind === 'queen' && p.active) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r - 3, 0, Math.PI * 2);
+        ctx.stroke();
       }
     }
 
-    function resolveCollision(a, b) {
+    function movePiece(p) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= friction;
+      p.vy *= friction;
+      if (Math.abs(p.vx) < stopEpsilon) p.vx = 0;
+      if (Math.abs(p.vy) < stopEpsilon) p.vy = 0;
+
+      const l = board.x + p.r;
+      const r = board.x + board.size - p.r;
+      const t = board.y + p.r;
+      const b = board.y + board.size - p.r;
+
+      if (p.x < l) { p.x = l; p.vx *= -board.bounce; playSound('wall'); }
+      if (p.x > r) { p.x = r; p.vx *= -board.bounce; playSound('wall'); }
+      if (p.y < t) { p.y = t; p.vy *= -board.bounce; playSound('wall'); }
+      if (p.y > b) { p.y = b; p.vy *= -board.bounce; playSound('wall'); }
+    }
+
+    function collide(a, b) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const dist = Math.hypot(dx, dy);
-      const minDist = a.r + b.r;
+      const min = a.r + b.r;
+      if (dist === 0 || dist >= min) return;
 
-      if (dist === 0 || dist >= minDist) return;
-
-      // Separate overlap
-      const overlap = (minDist - dist) / 2;
       const nx = dx / dist;
       const ny = dy / dist;
+      const overlap = (min - dist) / 2;
+      a.x -= nx * overlap; a.y -= ny * overlap;
+      b.x += nx * overlap; b.y += ny * overlap;
 
-      a.x -= nx * overlap;
-      a.y -= ny * overlap;
-      b.x += nx * overlap;
-      b.y += ny * overlap;
-
-      // 2D elastic-style impulse (equal mass)
       const rvx = b.vx - a.vx;
       const rvy = b.vy - a.vy;
-      const velAlongNormal = rvx * nx + rvy * ny;
+      const velN = rvx * nx + rvy * ny;
+      if (velN > 0) return;
 
-      if (velAlongNormal > 0) return;
-
-      const restitution = 0.92;
-      const impulse = -(1 + restitution) * velAlongNormal / 2;
-      const ix = impulse * nx;
-      const iy = impulse * ny;
-
-      a.vx -= ix;
-      a.vy -= iy;
-      b.vx += ix;
-      b.vy += iy;
+      const e = 0.93;
+      const j = -(1 + e) * velN / 2;
+      const ix = j * nx;
+      const iy = j * ny;
+      a.vx -= ix; a.vy -= iy;
+      b.vx += ix; b.vy += iy;
+      playSound('hit');
     }
 
-    function checkPocket(piece, isCoin = false) {
-      const pockets = getPocketCenters();
-      for (const p of pockets) {
-        const d = Math.hypot(piece.x - p.x, piece.y - p.y);
-        if (d < board.pocketRadius - 2) {
+    function addEffect(text, x, y, color = '#fff') {
+      effects.push({ text, x, y, life: 50, color });
+    }
+
+    function drawEffects() {
+      for (let i = effects.length - 1; i >= 0; i--) {
+        const e = effects[i];
+        e.life -= 1;
+        e.y -= 0.35;
+        if (e.life <= 0) { effects.splice(i, 1); continue; }
+        ctx.globalAlpha = e.life / 50;
+        ctx.fillStyle = e.color;
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText(e.text, e.x, e.y);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function checkPocket(piece, isCoin) {
+      for (const p of pockets()) {
+        if (Math.hypot(piece.x - p.x, piece.y - p.y) < board.pocketR - 2) {
           if (isCoin) {
             piece.active = false;
-            score += 10;
-            scoreEl.textContent = score;
+            piece.vx = piece.vy = 0;
+            turnPocketedCoin = true;
+            playSound('pocket');
+
+            if (piece.kind === 'queen') {
+              turnPocketedQueen = true;
+              queenNeedsCover = true;
+              queenOwner = currentPlayer;
+              addEffect('QUEEN!', piece.x, piece.y, '#ff7a91');
+            } else {
+              scores[currentPlayer] += 10;
+              addEffect('+10', piece.x, piece.y, '#8eff9f');
+            }
+            updateScoreUI();
           } else {
-            // Reset striker if pocketed
             resetStriker();
-            score = Math.max(0, score - 5);
-            scoreEl.textContent = score;
+            scores[currentPlayer] = Math.max(0, scores[currentPlayer] - 5);
+            addEffect('-5', piece.x, piece.y, '#ffaeae');
+            updateScoreUI();
+            playSound('foul');
           }
           return true;
         }
@@ -317,131 +325,213 @@
       return false;
     }
 
-    function anyPieceMoving() {
-      const movingCoins = coins.some(c => c.active && (c.vx !== 0 || c.vy !== 0));
-      const strikerMoving = striker.vx !== 0 || striker.vy !== 0;
-      return movingCoins || strikerMoving;
+    function anyMoving() {
+      if (striker.vx || striker.vy) return true;
+      return coins.some(c => c.active && (c.vx || c.vy));
     }
 
-    function resetStriker() {
-      striker.x = board.x + board.size / 2;
-      striker.y = board.y + board.size - 65;
-      striker.vx = 0;
-      striker.vy = 0;
-    }
-
-    function drawAimLine() {
-      if (!aiming || !shotLine) return;
-      ctx.strokeStyle = 'rgba(82, 209, 220, 0.8)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 6]);
-      ctx.beginPath();
-      ctx.moveTo(striker.x, striker.y);
-      ctx.lineTo(shotLine.x, shotLine.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+    function allStopped() {
+      return !anyMoving();
     }
 
     function update() {
       movePiece(striker);
       checkPocket(striker, false);
 
-      for (const coin of coins) {
-        if (!coin.active) continue;
-        movePiece(coin);
-        checkPocket(coin, true);
+      for (const c of coins) {
+        if (!c.active) continue;
+        movePiece(c);
+        checkPocket(c, true);
       }
 
-      // Striker vs coins collisions
-      for (const coin of coins) {
-        if (!coin.active) continue;
-        resolveCollision(striker, coin);
+      for (const c of coins) {
+        if (!c.active) continue;
+        collide(striker, c);
       }
-
-      // Coin vs coin collisions
       for (let i = 0; i < coins.length; i++) {
         if (!coins[i].active) continue;
         for (let j = i + 1; j < coins.length; j++) {
           if (!coins[j].active) continue;
-          resolveCollision(coins[i], coins[j]);
+          collide(coins[i], coins[j]);
         }
       }
 
-      if (!anyPieceMoving()) {
-        statusEl.textContent = 'Aim and drag from striker to shoot';
+      if (shotInProgress && allStopped()) {
+        endTurn();
       }
+    }
+
+    function drawAim() {
+      if (!aiming || !aimPoint) return;
+      ctx.setLineDash([7, 7]);
+      ctx.strokeStyle = 'rgba(99,224,239,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(striker.x, striker.y);
+      ctx.lineTo(aimPoint.x, aimPoint.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawBoard();
-      coins.forEach(coin => coin.active && drawPiece(coin));
+      coins.forEach(c => c.active && drawPiece(c));
       drawPiece(striker);
-      drawAimLine();
+      drawAim();
+      drawEffects();
     }
 
-    function gameLoop() {
-      update();
-      draw();
-      requestAnimationFrame(gameLoop);
+    function updateScoreUI() {
+      score1El.textContent = scores[0];
+      score2El.textContent = scores[1];
+      p1El.classList.toggle('active', currentPlayer === 0);
+      p2El.classList.toggle('active', currentPlayer === 1);
     }
 
-    function getMousePos(event) {
-      const rect = canvas.getBoundingClientRect();
+    function respotQueen() {
+      const queen = coins.find(c => c.kind === 'queen');
+      if (!queen) return;
+      queen.active = true;
+      queen.x = board.x + board.size / 2;
+      queen.y = board.y + board.size / 2;
+      queen.vx = queen.vy = 0;
+      addEffect('Queen back!', queen.x - 26, queen.y - 16, '#ffd3dc');
+    }
+
+    function nextPlayer() {
+      currentPlayer = (currentPlayer + 1) % 2;
+      updateScoreUI();
+    }
+
+    function endTurn() {
+      shotInProgress = false;
+
+      // Queen cover rule
+      if (queenNeedsCover && queenOwner === currentPlayer) {
+        if (turnPocketedQueen && turnPocketedCoin) {
+          // Pocketed queen + one more coin in same shot -> covered
+          queenNeedsCover = false;
+          queenOwner = null;
+          scores[currentPlayer] += 50;
+          addEffect('+50 QUEEN COVER', board.x + 180, board.y + 55, '#ff8ea3');
+          updateScoreUI();
+        } else if (!turnPocketedQueen && turnPocketedCoin) {
+          // Covered on immediate next shot
+          queenNeedsCover = false;
+          queenOwner = null;
+          scores[currentPlayer] += 50;
+          addEffect('+50 QUEEN COVER', board.x + 180, board.y + 55, '#ff8ea3');
+          updateScoreUI();
+        } else if (!turnPocketedQueen && !turnPocketedCoin) {
+          // Failed cover attempt: respot queen
+          queenNeedsCover = false;
+          queenOwner = null;
+          respotQueen();
+        }
+      }
+
+      // Turn rule: if no coin pocketed, switch turn.
+      if (!turnPocketedCoin) nextPlayer();
+
+      statusEl.textContent = `Player ${currentPlayer + 1}: drag from striker to shoot`;
+      turnPocketedCoin = false;
+      turnPocketedQueen = false;
+      resetStriker();
+
+      // End game check
+      const remaining = coins.filter(c => c.active && c.kind !== 'queen').length;
+      if (remaining === 0) {
+        const winner = scores[0] === scores[1] ? 'Draw' : (scores[0] > scores[1] ? 'Player 1 wins!' : 'Player 2 wins!');
+        statusEl.textContent = `Game Over: ${winner}`;
+      }
+    }
+
+    let shotInProgress = false;
+
+    function getMousePos(e) {
+      const r = canvas.getBoundingClientRect();
       return {
-        x: (event.clientX - rect.left) * (canvas.width / rect.width),
-        y: (event.clientY - rect.top) * (canvas.height / rect.height)
+        x: (e.clientX - r.left) * (canvas.width / r.width),
+        y: (e.clientY - r.top) * (canvas.height / r.height)
       };
     }
 
     function canShoot() {
-      return !anyPieceMoving();
+      return !shotInProgress && !anyMoving();
     }
 
-    canvas.addEventListener('mousedown', (event) => {
+    canvas.addEventListener('mousedown', e => {
       if (!canShoot()) return;
-      const pos = getMousePos(event);
-      const d = Math.hypot(pos.x - striker.x, pos.y - striker.y);
-      if (d <= striker.r + 8) {
+      const m = getMousePos(e);
+      if (Math.hypot(m.x - striker.x, m.y - striker.y) <= striker.r + 8) {
         aiming = true;
-        mouse = pos;
-        shotLine = pos;
-        statusEl.textContent = 'Release mouse to shoot';
+        aimPoint = m;
+        statusEl.textContent = `Player ${currentPlayer + 1}: release to shoot`;
       }
     });
 
-    canvas.addEventListener('mousemove', (event) => {
+    canvas.addEventListener('mousemove', e => {
       if (!aiming) return;
-      mouse = getMousePos(event);
-      shotLine = mouse;
+      aimPoint = getMousePos(e);
     });
 
-    canvas.addEventListener('mouseup', () => {
-      if (!aiming) return;
-
-      const dx = striker.x - mouse.x;
-      const dy = striker.y - mouse.y;
-      const power = Math.min(18, Math.hypot(dx, dy) * 0.12);
+    function shootFromAim() {
+      if (!aiming || !aimPoint) return;
+      const dx = striker.x - aimPoint.x;
+      const dy = striker.y - aimPoint.y;
+      const power = Math.min(19, Math.hypot(dx, dy) * 0.12);
       const angle = Math.atan2(dy, dx);
-
       striker.vx = Math.cos(angle) * power;
       striker.vy = Math.sin(angle) * power;
-
       aiming = false;
-      shotLine = null;
-      statusEl.textContent = 'Pieces moving...';
-    });
+      aimPoint = null;
+      shotInProgress = true;
+      statusEl.textContent = `Player ${currentPlayer + 1}: pieces moving...`;
+      playSound('shoot');
+    }
 
+    canvas.addEventListener('mouseup', shootFromAim);
     canvas.addEventListener('mouseleave', () => {
       if (!aiming) return;
       aiming = false;
-      shotLine = null;
-      statusEl.textContent = 'Aim and drag from striker to shoot';
+      aimPoint = null;
+      statusEl.textContent = `Player ${currentPlayer + 1}: drag from striker to shoot`;
     });
 
-    createCoins();
+    // Simple sound effects via WebAudio
+    const audio = new (window.AudioContext || window.webkitAudioContext)();
+    function beep(freq, duration, type = 'sine', volume = 0.04) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.value = volume;
+      osc.connect(gain);
+      gain.connect(audio.destination);
+      osc.start();
+      osc.stop(audio.currentTime + duration);
+    }
+
+    function playSound(kind) {
+      if (audio.state === 'suspended') audio.resume();
+      if (kind === 'shoot') beep(220, 0.07, 'triangle', 0.06);
+      if (kind === 'hit') beep(400, 0.02, 'square', 0.02);
+      if (kind === 'wall') beep(240, 0.015, 'sine', 0.015);
+      if (kind === 'pocket') { beep(520, 0.05, 'triangle', 0.05); setTimeout(() => beep(660, 0.06, 'triangle', 0.04), 20); }
+      if (kind === 'foul') beep(130, 0.12, 'sawtooth', 0.04);
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    buildCoins();
     resetStriker();
-    gameLoop();
+    updateScoreUI();
+    loop();
   </script>
 </body>
 </html>
