@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Style Carrom Board</title>
+  <style>
+    :root {
+      --bg: #1f2126;
+      --wood-outer: #8a5a3b;
+      --wood-inner: #d5b088;
+      --line: #613b20;
+      --pocket: #111;
+      --text: #f5f5f5;
+      --accent: #52d1dc;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at top, #2d313a, var(--bg));
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      padding: 20px;
+    }
+
+    .game-wrap {
+      width: min(92vw, 760px);
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(1.2rem, 2.4vw, 1.8rem);
+    }
+
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.95rem;
+    }
+
+    canvas {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1 / 1;
+      display: block;
+      border-radius: 14px;
+      box-shadow:
+        0 8px 24px rgba(0, 0, 0, 0.45),
+        inset 0 2px 0 rgba(255, 255, 255, 0.15);
+      cursor: crosshair;
+      user-select: none;
+      touch-action: none;
+      background: #3b2a1e;
+    }
+
+    .tip {
+      margin-top: 10px;
+      color: #d8d8d8;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-wrap">
+    <h1>3D Carrom Board (Canvas)</h1>
+    <div class="hud">
+      <div>Score: <strong id="score">0</strong></div>
+      <div id="status">Aim and drag from striker to shoot</div>
+    </div>
+    <canvas id="gameCanvas" width="700" height="700"></canvas>
+    <p class="tip">Tip: Click and drag from the striker. Longer drag = stronger shot.</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const statusEl = document.getElementById('status');
+
+    const board = {
+      x: 70,
+      y: 70,
+      size: 560,
+      pocketRadius: 22,
+      cushionBounce: 0.9
+    };
+
+    const friction = 0.992;
+    const stopThreshold = 0.03;
+    const strikerRadius = 14;
+    const coinRadius = 11;
+
+    let score = 0;
+    let aiming = false;
+    let mouse = { x: 0, y: 0 };
+    let shotLine = null;
+
+    const striker = {
+      x: board.x + board.size / 2,
+      y: board.y + board.size - 65,
+      r: strikerRadius,
+      vx: 0,
+      vy: 0,
+      color: '#f7f7f7'
+    };
+
+    const coins = [];
+
+    function createCoins() {
+      coins.length = 0;
+      const cx = board.x + board.size / 2;
+      const cy = board.y + board.size / 2;
+      const gap = coinRadius * 2 + 2;
+
+      const colors = ['#1f1f1f', '#f9d9a5', '#1f1f1f', '#f9d9a5', '#e03c54', '#f9d9a5', '#1f1f1f'];
+      const positions = [
+        [0, 0],
+        [gap, 0],
+        [-gap, 0],
+        [gap / 2, gap * 0.86],
+        [-gap / 2, gap * 0.86],
+        [gap / 2, -gap * 0.86],
+        [-gap / 2, -gap * 0.86]
+      ];
+
+      for (let i = 0; i < positions.length; i++) {
+        coins.push({
+          x: cx + positions[i][0],
+          y: cy + positions[i][1],
+          r: coinRadius,
+          vx: 0,
+          vy: 0,
+          color: colors[i],
+          active: true
+        });
+      }
+    }
+
+    function drawBoard() {
+      // Outer wood frame
+      ctx.fillStyle = '#8a5a3b';
+      roundRect(ctx, 25, 25, 650, 650, 18);
+      ctx.fill();
+
+      // Inner board with slight gradient for 3D style
+      const grad = ctx.createLinearGradient(board.x, board.y, board.x + board.size, board.y + board.size);
+      grad.addColorStop(0, '#e9caa2');
+      grad.addColorStop(1, '#cfa172');
+      ctx.fillStyle = grad;
+      ctx.fillRect(board.x, board.y, board.size, board.size);
+
+      // Borders and center circle
+      ctx.strokeStyle = '#613b20';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(board.x, board.y, board.size, board.size);
+
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(board.x + board.size / 2, board.y + board.size / 2, 45, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Pockets
+      const p = board.pocketRadius;
+      const pockets = getPocketCenters();
+      ctx.fillStyle = '#111';
+      pockets.forEach(pt => {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, p, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function getPocketCenters() {
+      return [
+        { x: board.x, y: board.y },
+        { x: board.x + board.size, y: board.y },
+        { x: board.x, y: board.y + board.size },
+        { x: board.x + board.size, y: board.y + board.size }
+      ];
+    }
+
+    function roundRect(context, x, y, width, height, radius) {
+      context.beginPath();
+      context.moveTo(x + radius, y);
+      context.arcTo(x + width, y, x + width, y + height, radius);
+      context.arcTo(x + width, y + height, x, y + height, radius);
+      context.arcTo(x, y + height, x, y, radius);
+      context.arcTo(x, y, x + width, y, radius);
+      context.closePath();
+    }
+
+    function drawPiece(piece) {
+      const radial = ctx.createRadialGradient(piece.x - 4, piece.y - 4, 2, piece.x, piece.y, piece.r);
+      radial.addColorStop(0, '#fff');
+      radial.addColorStop(0.08, piece.color);
+      radial.addColorStop(1, shadeColor(piece.color, -30));
+
+      ctx.fillStyle = radial;
+      ctx.beginPath();
+      ctx.arc(piece.x, piece.y, piece.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    function shadeColor(color, percent) {
+      const num = parseInt(color.slice(1), 16);
+      let r = (num >> 16) + percent;
+      let g = ((num >> 8) & 0x00FF) + percent;
+      let b = (num & 0x0000FF) + percent;
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    function movePiece(piece) {
+      piece.x += piece.vx;
+      piece.y += piece.vy;
+      piece.vx *= friction;
+      piece.vy *= friction;
+
+      if (Math.abs(piece.vx) < stopThreshold) piece.vx = 0;
+      if (Math.abs(piece.vy) < stopThreshold) piece.vy = 0;
+
+      // Wall bounce
+      const left = board.x + piece.r;
+      const right = board.x + board.size - piece.r;
+      const top = board.y + piece.r;
+      const bottom = board.y + board.size - piece.r;
+
+      if (piece.x < left) {
+        piece.x = left;
+        piece.vx *= -board.cushionBounce;
+      } else if (piece.x > right) {
+        piece.x = right;
+        piece.vx *= -board.cushionBounce;
+      }
+
+      if (piece.y < top) {
+        piece.y = top;
+        piece.vy *= -board.cushionBounce;
+      } else if (piece.y > bottom) {
+        piece.y = bottom;
+        piece.vy *= -board.cushionBounce;
+      }
+    }
+
+    function resolveCollision(a, b) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy);
+      const minDist = a.r + b.r;
+
+      if (dist === 0 || dist >= minDist) return;
+
+      // Separate overlap
+      const overlap = (minDist - dist) / 2;
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      a.x -= nx * overlap;
+      a.y -= ny * overlap;
+      b.x += nx * overlap;
+      b.y += ny * overlap;
+
+      // 2D elastic-style impulse (equal mass)
+      const rvx = b.vx - a.vx;
+      const rvy = b.vy - a.vy;
+      const velAlongNormal = rvx * nx + rvy * ny;
+
+      if (velAlongNormal > 0) return;
+
+      const restitution = 0.92;
+      const impulse = -(1 + restitution) * velAlongNormal / 2;
+      const ix = impulse * nx;
+      const iy = impulse * ny;
+
+      a.vx -= ix;
+      a.vy -= iy;
+      b.vx += ix;
+      b.vy += iy;
+    }
+
+    function checkPocket(piece, isCoin = false) {
+      const pockets = getPocketCenters();
+      for (const p of pockets) {
+        const d = Math.hypot(piece.x - p.x, piece.y - p.y);
+        if (d < board.pocketRadius - 2) {
+          if (isCoin) {
+            piece.active = false;
+            score += 10;
+            scoreEl.textContent = score;
+          } else {
+            // Reset striker if pocketed
+            resetStriker();
+            score = Math.max(0, score - 5);
+            scoreEl.textContent = score;
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function anyPieceMoving() {
+      const movingCoins = coins.some(c => c.active && (c.vx !== 0 || c.vy !== 0));
+      const strikerMoving = striker.vx !== 0 || striker.vy !== 0;
+      return movingCoins || strikerMoving;
+    }
+
+    function resetStriker() {
+      striker.x = board.x + board.size / 2;
+      striker.y = board.y + board.size - 65;
+      striker.vx = 0;
+      striker.vy = 0;
+    }
+
+    function drawAimLine() {
+      if (!aiming || !shotLine) return;
+      ctx.strokeStyle = 'rgba(82, 209, 220, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(striker.x, striker.y);
+      ctx.lineTo(shotLine.x, shotLine.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function update() {
+      movePiece(striker);
+      checkPocket(striker, false);
+
+      for (const coin of coins) {
+        if (!coin.active) continue;
+        movePiece(coin);
+        checkPocket(coin, true);
+      }
+
+      // Striker vs coins collisions
+      for (const coin of coins) {
+        if (!coin.active) continue;
+        resolveCollision(striker, coin);
+      }
+
+      // Coin vs coin collisions
+      for (let i = 0; i < coins.length; i++) {
+        if (!coins[i].active) continue;
+        for (let j = i + 1; j < coins.length; j++) {
+          if (!coins[j].active) continue;
+          resolveCollision(coins[i], coins[j]);
+        }
+      }
+
+      if (!anyPieceMoving()) {
+        statusEl.textContent = 'Aim and drag from striker to shoot';
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawBoard();
+      coins.forEach(coin => coin.active && drawPiece(coin));
+      drawPiece(striker);
+      drawAimLine();
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function getMousePos(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (canvas.width / rect.width),
+        y: (event.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    function canShoot() {
+      return !anyPieceMoving();
+    }
+
+    canvas.addEventListener('mousedown', (event) => {
+      if (!canShoot()) return;
+      const pos = getMousePos(event);
+      const d = Math.hypot(pos.x - striker.x, pos.y - striker.y);
+      if (d <= striker.r + 8) {
+        aiming = true;
+        mouse = pos;
+        shotLine = pos;
+        statusEl.textContent = 'Release mouse to shoot';
+      }
+    });
+
+    canvas.addEventListener('mousemove', (event) => {
+      if (!aiming) return;
+      mouse = getMousePos(event);
+      shotLine = mouse;
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (!aiming) return;
+
+      const dx = striker.x - mouse.x;
+      const dy = striker.y - mouse.y;
+      const power = Math.min(18, Math.hypot(dx, dy) * 0.12);
+      const angle = Math.atan2(dy, dx);
+
+      striker.vx = Math.cos(angle) * power;
+      striker.vy = Math.sin(angle) * power;
+
+      aiming = false;
+      shotLine = null;
+      statusEl.textContent = 'Pieces moving...';
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      if (!aiming) return;
+      aiming = false;
+      shotLine = null;
+      statusEl.textContent = 'Aim and drag from striker to shoot';
+    });
+
+    createCoins();
+    resetStriker();
+    gameLoop();
+  </script>
+</body>
+</html>
